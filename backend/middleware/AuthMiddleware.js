@@ -21,15 +21,28 @@ const authenticateUser = (req, res, next) => {
     }
 };
 
-module.exports = authenticateUser;
+// Allows public registration while identifying an authenticated staff member.
+const optionalAuthenticate = (req, res, next) => {
+    const token = req.cookies.token || req.header("Authorization")?.replace("Bearer ", "");
+    if (!token) {
+        return next();
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (!err) {
+            req.user = decoded;
+        }
+        next();
+    });
+};
 
 const authorizeRole = (roles) => {
     return (req, res, next) => {
-        if (!roles.includes(req.user.role)) {
+        if (!req.user || !roles.includes(req.user.role)) {
             return res.status(403).json({ message: 'Forbidden: Insufficient permissions' });
         }
         next();
     };
 };
 
-module.exports = { authenticateUser, authorizeRole };
+module.exports = { authenticateUser, optionalAuthenticate, authorizeRole };

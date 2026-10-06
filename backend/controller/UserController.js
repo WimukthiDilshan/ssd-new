@@ -4,6 +4,15 @@ const nodemailer = require("nodemailer");
 const { sendVerificationCode } = require("../utils/emailService");
 require("dotenv").config();
 
+const VALID_ROLES = ['customer', 'manager', 'admin', 'cashier'];
+const USER_SAFE_COLUMNS = "user_id, first_name, last_name, address, phone_number, email, role";
+const isPrivilegedActor = (user) => user && ['admin', 'manager'].includes(user.role);
+const canAccessUserRecord = (actor, targetId) => {
+    if (!actor) return false;
+    if (isPrivilegedActor(actor)) return true;
+    return String(actor.user_id) === String(targetId);
+};
+
 // Create nodemailer transporter
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -19,10 +28,13 @@ exports.createUser = async (req, res) => {
         const { first_name, last_name, address, phone_number, email, password, role } = req.body;
         const db = req.db;
 
-        // Validate role
-        const validRoles = ['customer', 'manager', 'admin', 'cashier'];
-        if (role && !validRoles.includes(role)) {
+        // Public signup is always a customer. Staff roles require an authenticated admin/manager.
+        let assignedRole = 'customer';
+        if (isPrivilegedActor(req.user)) {
+            if (role && !VALID_ROLES.includes(role)) {
             return res.status(400).json({ message: "🚨 Invalid role. Must be one of: customer, manager, admin, cashier" });
+            }
+            assignedRole = role || 'customer';
         }
 
         // Check if email already exists
@@ -47,14 +59,14 @@ exports.createUser = async (req, res) => {
                 // ✅ Insert user
                 db.execute(
                     "INSERT INTO user (first_name, last_name, address, phone_number, email, password, role) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [first_name, last_name, address, phone_number, email, hashedPassword, role || 'customer'],
+                    [first_name, last_name, address, phone_number, email, hashedPassword, assignedRole],
                     (err, result) => {
                         if (err) return res.status(500).json({ message: "Server Error", error: err });
 
                         res.status(201).json({
                             message: "✅ User created successfully",
                             user_id: result.insertId,
-                            role: role || 'customer'
+                            role: assignedRole
                         });
                     }
                 );
@@ -148,7 +160,7 @@ exports.logout = (req, res) => {
 exports.getUsers = async (req, res) => {
     try {
         const db = req.db;
-        db.execute("SELECT * FROM user", (err, results) => {
+        db.execute(`SELECT ${USER_SAFE_COLUMNS} FROM user`, (err, results) => {
             if (err) return res.status(500).json({ message: "Server Error", error: err });
 
             res.status(200).json(results);
@@ -162,8 +174,11 @@ exports.getUsers = async (req, res) => {
 exports.getUserById = async (req, res) => {
     try {
         const { id } = req.params;
+        if (!canAccessUserRecord(req.user, id)) {
+            return res.status(403).json({ message: "Forbidden: You can only view your own profile" });
+        }
         const db = req.db;
-        db.execute("SELECT * FROM user WHERE user_id = ?", [id], (err, results) => {
+        db.execute(`SELECT ${USER_SAFE_COLUMNS} FROM user WHERE user_id = ?`, [id], (err, results) => {
             if (err) return res.status(500).json({ message: "Server Error", error: err });
 
             if (results.length === 0) {
@@ -182,6 +197,9 @@ exports.updateUser = async (req, res) => {
     try {
         const { id } = req.params;
         const { first_name, last_name, address, phone_number, email } = req.body;
+        if (!canAccessUserRecord(req.user, id)) {
+            return res.status(403).json({ message: "Forbidden: You can only update your own profile" });
+        }
         const db = req.db;
 
         // ✅ Check if user exists
@@ -266,7 +284,7 @@ exports.getUsersByRole = async (req, res) => {
             return res.status(400).json({ message: "🚨 Invalid role. Must be one of: customer, manager, admin, cashier" });
         }
 
-        db.execute("SELECT * FROM user WHERE role = ?", [role], (err, results) => {
+        db.execute(`SELECT ${USER_SAFE_COLUMNS} FROM user WHERE role = ?`, [role], (err, results) => {
             if (err) return res.status(500).json({ message: "Server Error", error: err });
 
             res.status(200).json(results);

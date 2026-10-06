@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const { authenticateUser } = require("../middleware/AuthMiddleware");
+const { authenticateUser, authorizeRole } = require("../middleware/AuthMiddleware");
+const purchaseAccess = [authenticateUser, authorizeRole(['admin', 'manager'])];
 const {
     createPurchase,
     getAllPurchases,
@@ -15,33 +16,33 @@ const {
 } = require("../controller/PurchaseController");
 
 // Create new purchase (Manager and Admin only)
-router.post("/", authenticateUser, createPurchase);
+router.post("/", ...purchaseAccess, createPurchase);
 
 // Create new purchase with automatic stock entry (Manager and Admin only)
-router.post("/with-stock", authenticateUser, createPurchaseWithStock);
+router.post("/with-stock", ...purchaseAccess, createPurchaseWithStock);
 
 // Get all purchases (Manager and Admin only)
-router.get("/", authenticateUser, getAllPurchases);
+router.get("/", ...purchaseAccess, getAllPurchases);
 
 // Get purchase summary report (Manager and Admin only)
-router.get("/report/summary", authenticateUser, getPurchaseSummaryReport);
+router.get("/report/summary", ...purchaseAccess, getPurchaseSummaryReport);
 
 // Get waste analysis report (Manager and Admin only)
-router.get("/report/waste", authenticateUser, getWasteAnalysisReport);
+router.get("/report/waste", ...purchaseAccess, getWasteAnalysisReport);
 
 // Get purchases by item ID (Manager and Admin only)
-router.get("/item/:itemId", authenticateUser, getPurchasesByItemId);
+router.get("/item/:itemId", ...purchaseAccess, getPurchasesByItemId);
+
+// Get purchases by date range (Manager and Admin only)
+router.get('/date-range', ...purchaseAccess, getPurchasesByDateRange);
 
 // Get purchase by ID (Manager and Admin only)
-router.get("/:purchaseId", authenticateUser, getPurchaseById);
+router.get("/:purchaseId", ...purchaseAccess, getPurchaseById);
 
 // Update purchase (Manager and Admin only)
-router.put("/:purchaseId", authenticateUser, updatePurchase);
+router.put("/:purchaseId", ...purchaseAccess, updatePurchase);
 
 // Delete purchase (Manager and Admin only)
-router.delete("/:purchaseId", authenticateUser, deletePurchase);
-
-// Get purchases by date range
-router.get('/date-range', authenticateUser, getPurchasesByDateRange);
+router.delete("/:purchaseId", ...purchaseAccess, deletePurchase);
 
 module.exports = router; 
