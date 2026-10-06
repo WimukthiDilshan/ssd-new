@@ -1,8 +1,9 @@
 const express = require('express');
 const { PythonShell } = require('python-shell');
+const { authenticateUser, authorizeRole } = require('../middleware/AuthMiddleware');
 const router = express.Router();
 
-router.post('/predict-sales', (req, res) => {
+router.post('/predict-sales', authenticateUser, authorizeRole(['admin', 'manager']), (req, res) => {
   const { sale_date } = req.body;
   console.log('Running Python script...');
 
