@@ -61,7 +61,7 @@ exports.createProduct = async (req, res) => {
         });
     } catch (error) {
         console.error("Create Product Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -78,7 +78,7 @@ exports.getAllProducts = async (req, res) => {
         db.execute(
             query,
             (err, results) => {
-                if (err) return res.status(500).json({ message: "Server Error", error: err });
+                if (err) { console.error("Database operation failed:", err); return res.status(500).json({ message: "Server Error" }); }
                 res.status(200).json(results);
             }
         );
@@ -97,7 +97,7 @@ exports.getProductById = async (req, res) => {
             "SELECT * FROM product WHERE product_id = ?",
             [productId],
             (err, results) => {
-                if (err) return res.status(500).json({ message: "Server Error", error: err });
+                if (err) { console.error("Database operation failed:", err); return res.status(500).json({ message: "Server Error" }); }
 
                 if (results.length === 0) {
                     return res.status(404).json({ message: "❌ Product not found" });
@@ -121,7 +121,7 @@ exports.getProductsByCategory = async (req, res) => {
             "SELECT * FROM product WHERE category = ? ORDER BY product_name",
             [category],
             (err, results) => {
-                if (err) return res.status(500).json({ message: "Server Error", error: err });
+                if (err) { console.error("Database operation failed:", err); return res.status(500).json({ message: "Server Error" }); }
                 res.status(200).json(results);
             }
         );
@@ -225,7 +225,7 @@ exports.updateProduct = async (req, res) => {
         res.status(200).json({ message: "✅ Product updated successfully" });
     } catch (error) {
         console.error("Update Product Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -263,7 +263,7 @@ exports.deactivateProduct = async (req, res) => {
         res.status(200).json({ message: "✅ Product deactivated successfully" });
     } catch (error) {
         console.error("Deactivate Product Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -274,7 +274,7 @@ exports.getAllCategories = async (req, res) => {
         db.execute(
             "SELECT DISTINCT category FROM product ORDER BY category",
             (err, results) => {
-                if (err) return res.status(500).json({ message: "Server Error", error: err });
+                if (err) { console.error("Database operation failed:", err); return res.status(500).json({ message: "Server Error" }); }
                 res.status(200).json(results.map(r => r.category));
             }
         );
@@ -309,7 +309,6 @@ exports.getProductStock = async (req, res) => {
             (err, results) => {
                 if (err) return res.status(500).json({ 
                     message: "Server Error", 
-                    error: err.message 
                 });
 
                 // If there's no stock record, return zero quantity
@@ -329,7 +328,6 @@ exports.getProductStock = async (req, res) => {
         console.error("Get Product Stock Error:", error);
         res.status(500).json({ 
             message: "Server Error", 
-            error: error.message 
         });
     }
 }; 
@@ -354,7 +352,7 @@ exports.getProductNamesByIds = async (req, res) => {
             `SELECT product_id, product_name FROM product WHERE product_id IN (${placeholders})`,
             productIds,
             (err, results) => {
-                if (err) return res.status(500).json({ message: "Server Error", error: err });
+                if (err) { console.error("Database operation failed:", err); return res.status(500).json({ message: "Server Error" }); }
                 
                 // Convert to a map of id -> name for easier lookup
                 const productMap = {};
@@ -367,7 +365,7 @@ exports.getProductNamesByIds = async (req, res) => {
         );
     } catch (error) {
         console.error("Get Product Names Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 

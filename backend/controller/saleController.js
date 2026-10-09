@@ -117,8 +117,7 @@ const createSale = async (req, res) => {
     } catch (error) {
         console.error("Create Sale Error:", error);
         res.status(500).json({ 
-            message: "❌ " + (error.message || "Server Error"),
-            error: error.message 
+            message: "Server Error",
         });
     }
 };
@@ -150,7 +149,6 @@ const getAllSales = async (req, res) => {
         console.error("Fetch Sales Error:", error);
         res.status(500).json({ 
             message: "❌ Failed to fetch sales",
-            error: error.message 
         });
     }
 };
@@ -196,7 +194,6 @@ const getSaleById = async (req, res) => {
         console.error("Fetch Sale Error:", error);
         res.status(500).json({ 
             message: "❌ Failed to fetch sale details",
-            error: error.message 
         });
     }
 };
@@ -271,7 +268,6 @@ const getDailySalesReport = async (req, res) => {
         console.error("Sales Report Error:", error);
         res.status(500).json({ 
             message: "❌ Failed to generate sales report",
-            error: error.message 
         });
     }
 };
@@ -367,7 +363,6 @@ const getSalesStatistics = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to generate sales statistics',
-            error: error.message
         });
     }
 };
@@ -444,7 +439,6 @@ const getDetailedSales = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch detailed sales',
-            error: error.message
         });
     }
 };
@@ -512,7 +506,6 @@ const getSaleDetails = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: 'Error fetching sale details',
-            error: error.message 
         });
     }
 };
@@ -591,7 +584,6 @@ const getSalesByDateRange = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "❌ Failed to fetch sales data",
-            error: error.message
         });
     }
 };
@@ -650,7 +642,6 @@ const getAllSalesForAdmin = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: "❌ Failed to fetch sales details",
-            error: error.message 
         });
     }
 };

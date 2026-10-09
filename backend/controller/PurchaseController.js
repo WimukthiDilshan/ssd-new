@@ -59,7 +59,7 @@ exports.createPurchase = async (req, res) => {
         });
     } catch (error) {
         console.error("Create Purchase Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -130,7 +130,7 @@ exports.createPurchaseWithStock = async (req, res) => {
         });
     } catch (error) {
         console.error("Create Purchase with Stock Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -171,16 +171,12 @@ exports.getAllPurchases = async (req, res) => {
             console.error("Database query error:", dbError);
             return res.status(500).json({ 
                 message: "Database query failed", 
-                error: dbError.message,
-                code: dbError.code
             });
         }
     } catch (error) {
         console.error("Get Purchases Error:", error);
         res.status(500).json({ 
             message: "Server Error", 
-            error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };
@@ -207,7 +203,7 @@ exports.getPurchaseById = async (req, res) => {
              WHERE p.purchase_id = ?`,
             [purchaseId],
             (err, results) => {
-                if (err) return res.status(500).json({ message: "Server Error", error: err });
+                if (err) { console.error("Database operation failed:", err); return res.status(500).json({ message: "Server Error" }); }
 
                 if (results.length === 0) {
                     return res.status(404).json({ message: "❌ Purchase record not found" });
@@ -244,7 +240,7 @@ exports.getPurchasesByItemId = async (req, res) => {
              ORDER BY p.purchase_date DESC`,
             [itemId],
             (err, results) => {
-                if (err) return res.status(500).json({ message: "Server Error", error: err });
+                if (err) { console.error("Database operation failed:", err); return res.status(500).json({ message: "Server Error" }); }
                 res.status(200).json(results);
             }
         );
@@ -309,7 +305,7 @@ exports.updatePurchase = async (req, res) => {
         res.status(200).json({ message: "✅ Purchase record updated successfully" });
     } catch (error) {
         console.error("Update Purchase Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -347,7 +343,7 @@ exports.deletePurchase = async (req, res) => {
         res.status(200).json({ message: "✅ Purchase record deleted successfully" });
     } catch (error) {
         console.error("Delete Purchase Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -461,7 +457,7 @@ exports.getPurchaseSummaryReport = async (req, res) => {
         });
     } catch (error) {
         console.error("Generate Report Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 };
 
@@ -539,7 +535,7 @@ exports.getWasteAnalysisReport = async (req, res) => {
         });
     } catch (error) {
         console.error("Waste Analysis Error:", error);
-        res.status(500).json({ message: "Server Error", error: error.message });
+        res.status(500).json({ message: "Server Error" });
     }
 }; 
 
@@ -601,7 +597,7 @@ exports.processOrder = async (req, res) => {
     } catch (error) {
         await db.promise().rollback();
         console.error('❌ Error processing order:', error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: "Server Error" });
     }
 };
 
@@ -684,8 +680,6 @@ exports.getPurchasesByDateRange = async (req, res) => {
       console.error("Get Purchases by Date Range Error:", error);
       res.status(500).json({ 
         message: "Server Error", 
-        error: error.message,
-        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
     }
   };

@@ -273,7 +273,6 @@ exports.getAllPayments = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: 'Error fetching payments',
-            error: error.message 
         });
     }
 };
@@ -347,7 +346,6 @@ exports.getPaymentStatistics = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: 'Error fetching payment statistics',
-            error: error.message 
         });
     }
 };
@@ -500,7 +498,6 @@ exports.getPaymentDetails = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: 'Error fetching payment details',
-            error: error.message 
         });
     }
 };
@@ -545,7 +542,6 @@ exports.getPaymentsByDateRange = async (req, res) => {
         res.status(500).json({ 
             success: false, 
             message: 'Error fetching payments by date range',
-            error: error.message 
         });
     }
 }; 

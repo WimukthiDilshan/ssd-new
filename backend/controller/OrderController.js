@@ -267,7 +267,7 @@ const getAllOrders = async (req, res) => {
         res.json(ordersWithItems);
     } catch (error) {
         console.error('Error fetching orders:', error);
-        res.status(500).json({ message: 'Error fetching orders', error: error.message });
+        res.status(500).json({ message: 'Error fetching orders' });
     }
 };
 
@@ -328,7 +328,7 @@ const getOrder = async (req, res) => {
   
     } catch (error) {
       console.error('Error fetching order:', error);
-      res.status(500).json({ message: 'Error fetching order', error: error.message });
+      res.status(500).json({ message: 'Error fetching order' });
     }
   };
   
@@ -366,7 +366,7 @@ const getUserOrders = async (req, res) => {
         res.json(ordersWithItems);
     } catch (error) {
         console.error('Error fetching user orders:', error);
-        res.status(500).json({ message: 'Error fetching user orders', error: error.message });
+        res.status(500).json({ message: 'Error fetching user orders' });
     }
 };
 
@@ -930,7 +930,7 @@ const handleOrderFlow = async (req, res) => {
 
     } catch (error) {
         console.error('❌ Error in order flow:', error);
-        res.status(500).json({ message: 'Order creation failed', error: error.message });
+        res.status(500).json({ message: 'Order creation failed' });
     } finally {
         db.end();
     }
@@ -986,7 +986,6 @@ const getRecentProductionOrders = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error fetching recent production orders',
-            error: error.message
         });
     }
 };
@@ -1045,7 +1044,6 @@ const getAllOrdersForAdmin = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error fetching orders',
-            error: error.message
         });
     }
 };
@@ -1133,7 +1131,6 @@ const getOrdersByDateRange = async (req, res) => {
         res.status(500).json({ 
             success: false,
             message: 'Error fetching orders by date range', 
-            error: error.message 
         });
     }
 };
@@ -1219,7 +1216,6 @@ const updateOrderStatus = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error updating order',
-            error: error.message
         });
     }
 };
@@ -1311,7 +1307,6 @@ const deleteOrder = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error deleting order',
-            error: error.message
         });
     }
 };
