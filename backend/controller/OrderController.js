@@ -1,3 +1,4 @@
+const paymentConnection = require('../utils/paymentConnection');
 const util = require('util');
 const checkInventoryForProduction = async (db, items) => {
     try {
@@ -729,9 +730,25 @@ const getUserOrders = async (req, res) => {
 const { sendOrderConfirmation } = require('../utils/emailService');
 
 const handleOrderFlow = async (req, res) => {
-    const db = req.db;
+    const db = paymentConnection(req.db);
     const { items, shipping_address, order_type = 'DIRECT_SALE', date, payment_method = 'CARD' } = req.body;
     const user_id = req.user.user_id;
+    if (!['CARD', 'CASH'].includes(payment_method) || !['DIRECT_SALE', 'PRODUCTION_ORDER'].includes(order_type) ||
+        !Array.isArray(items) || items.length === 0 || items.some(item =>
+            !Number.isSafeInteger(Number(item.product_id)) || Number(item.product_id) <= 0 ||
+            !Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) <= 0)) {
+        db.end();
+        return res.status(400).json({ message: 'Invalid order items, type or payment method' });
+    }
+    if (payment_method === 'CASH' && !['admin', 'manager', 'cashier'].includes(req.user.role)) {
+        db.end();
+        return res.status(403).json({ message: 'Cash orders require staff authorization' });
+    }
+    // Combine duplicate products so stock checks cover the entire requested quantity.
+    const quantities = new Map();
+    for (const item of items) quantities.set(Number(item.product_id), (quantities.get(Number(item.product_id)) || 0) + Number(item.quantity));
+    items.splice(0, items.length, ...Array.from(quantities, ([product_id, quantity]) => ({ product_id, quantity })));
+
     console.log('🧪 Inserting Order With:', {
         user_id,
         order_type,
@@ -787,6 +804,8 @@ const handleOrderFlow = async (req, res) => {
                         quantity: item.quantity,
                         unit_price: rows[0].selling_price
                     });
+                } else {
+                    throw new Error('Product not found');
                 }
             }
             
@@ -816,7 +835,7 @@ const handleOrderFlow = async (req, res) => {
                 // 🆕 Handle stock deduction if order_type is DIRECT_SALE
                 if (order_type === 'DIRECT_SALE') {
                     const [stockRows] = await db.promise().execute(
-                        'SELECT stock_id, quantity_available FROM product_stock WHERE product_id = ? ORDER BY last_updated DESC LIMIT 1',
+                        'SELECT stock_id, quantity_available FROM product_stock WHERE product_id = ? ORDER BY last_updated DESC LIMIT 1 FOR UPDATE',
                         [item.product_id]
                     );
 
@@ -831,13 +850,12 @@ const handleOrderFlow = async (req, res) => {
                             });
                         }
 
-                        // Update product_stock
-                        await db.promise().execute(
-                            'UPDATE product_stock SET quantity_available = ?, last_updated = NOW() WHERE stock_id = ?',
-                            [newStock, stockRows[0].stock_id]
-                        );
-
-                        console.log(`✅ Stock updated for product ID ${item.product_id}: ${currentStock} -> ${newStock}`);
+                        if (payment_method === 'CASH') {
+                            await db.promise().execute(
+                                'UPDATE product_stock SET quantity_available = ?, last_updated = NOW() WHERE stock_id = ?',
+                                [newStock, stockRows[0].stock_id]
+                            );
+                        }
                     } else {
                         await db.promise().rollback();
                         return res.status(400).json({ 
@@ -913,6 +931,8 @@ const handleOrderFlow = async (req, res) => {
     } catch (error) {
         console.error('❌ Error in order flow:', error);
         res.status(500).json({ message: 'Order creation failed', error: error.message });
+    } finally {
+        db.end();
     }
 };
 
@@ -1244,7 +1264,7 @@ const deleteOrder = async (req, res) => {
             const [releases] = await db.promise().execute(
                 `SELECT release_id, item_id, quantity, stock_id 
                  FROM inventory_release 
-                 WHERE order_id = ? AND status = 'pending' AND stock_id IS NOT NULL`,
+                 WHERE order_id = ? AND status = 'pending' FOR UPDATE AND stock_id IS NOT NULL`,
                 [id]
             );
 
@@ -1298,11 +1318,43 @@ const deleteOrder = async (req, res) => {
 
 
 
+const deductDirectSaleStock = async (db, order_id) => {
+    const [items] = await db.promise().execute(
+        'SELECT product_id, quantity FROM order_product WHERE order_id = ?',
+        [order_id]
+    );
+
+    for (const item of items) {
+        const [stockRows] = await db.promise().execute(
+            'SELECT stock_id, quantity_available FROM product_stock WHERE product_id = ? ORDER BY last_updated DESC LIMIT 1 FOR UPDATE',
+            [item.product_id]
+        );
+
+        if (stockRows.length === 0) {
+            throw new Error(`No stock record found for product ID ${item.product_id}`);
+        }
+
+        const currentStock = Number(stockRows[0].quantity_available);
+        const newStock = currentStock - Number(item.quantity);
+
+        if (newStock < 0) {
+            throw new Error(
+                `Not enough stock for product ID ${item.product_id}. Available: ${currentStock}, Requested: ${item.quantity}`
+            );
+        }
+
+        await db.promise().execute(
+            'UPDATE product_stock SET quantity_available = ?, last_updated = NOW() WHERE stock_id = ?',
+            [newStock, stockRows[0].stock_id]
+        );
+    }
+};
+
 const processOrder = async (db, order_id) => {
     const releases = await db.query(`
         SELECT release_id, item_id, quantity 
         FROM inventory_release 
-        WHERE order_id = ? AND status = 'pending'
+        WHERE order_id = ? AND status = 'pending' FOR UPDATE
     `, [order_id]);
 
     for (const release of releases) {
@@ -1312,7 +1364,7 @@ const processOrder = async (db, order_id) => {
             SELECT stock_id, quantity_available 
             FROM inventory_stock 
             WHERE item_id = ? AND quantity_available > 0 
-            ORDER BY stock_id ASC
+            ORDER BY stock_id ASC FOR UPDATE
         `, [release.item_id]);
 
         for (const stock of stocks) {
@@ -1342,27 +1394,35 @@ const processOrder = async (db, order_id) => {
         if (remainingQty > 0) {
             throw new Error(`❌ Insufficient stock for item_id ${release.item_id}. Missing: ${remainingQty}`);
         }
+        await db.query("UPDATE inventory_release SET status = 'released' WHERE release_id = ?", [release.release_id]);
     }
 
     console.log(`✅ Inventory processed using FIFO for order_id ${order_id}`);
 };
 
 const processProductionOrder = async (req, res) => {
-    const db = req.db;
-    const order_id = req.params.id;
-
-    // ✅ Wrap query to use async/await with plain db connection
-    db.query = util.promisify(db.query).bind(db);
-
+    if (!['admin', 'manager', 'cashier'].includes(req.user.role)) {
+        return res.status(403).json({ message: 'Staff authorization required' });
+    }
+    const db = paymentConnection(req.db);
     try {
-        await processOrder(db, order_id);
-        res.status(200).json({ message: 'Production order processed successfully!' });
+        await db.promise().beginTransaction();
+        const [orders] = await db.promise().execute('SELECT payment_method, order_type FROM orders WHERE order_id = ? FOR UPDATE', [req.params.id]);
+        if (!orders.length || orders[0].payment_method !== 'CASH' || orders[0].order_type !== 'PRODUCTION_ORDER') {
+            await db.promise().rollback();
+            return res.status(400).json({ message: 'Card inventory is processed only after verified payment' });
+        }
+        await processOrder({ query: util.promisify(db.query).bind(db) }, req.params.id);
+        await db.promise().commit();
+        res.json({ message: 'Production order processed successfully!' });
     } catch (error) {
-        console.error('❌ Error processing production order:', error);
-        res.status(500).json({ message: 'Failed to process production order', error: error.message });
+        await db.promise().rollback();
+        console.error('Error processing production order:', error);
+        res.status(500).json({ message: 'Failed to process production order' });
+    } finally {
+        db.end();
     }
 };
-
 
 module.exports = {
     // createOrder,
@@ -1380,6 +1440,7 @@ module.exports = {
     // updateOrder,
     deleteOrder,
     processOrder,
+    deductDirectSaleStock,
     processProductionOrder,
     updateOrderStatus
 };

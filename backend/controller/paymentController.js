@@ -1,23 +1,60 @@
+const paymentConnection = require('../utils/paymentConnection');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const { processOrder } = require('./OrderController'); // Import processOrder
+const { processOrder, deductDirectSaleStock } = require('./OrderController'); // Import processOrder
 const util = require('util'); // Make sure this is at the top
 
 // Create a payment intent
 exports.createPaymentIntent = async (req, res) => {
-    const { amount, order_id } = req.body;
+    const { order_id } = req.body;
     const user_id = req.user.user_id;
-    const db = req.db;
-
-    if (!order_id || !amount) {
-        return res.status(400).json({ message: 'Order ID and amount are required' });
+    if (!order_id) {
+        return res.status(400).json({ message: 'Order ID is required' });
     }
+    const db = paymentConnection(req.db);
 
     try {
-        // Start transaction
         await db.promise().beginTransaction();
+        const [orderRows] = await db.promise().execute(
+            `SELECT order_id, user_id, total_amount, order_status, payment_method
+             FROM orders WHERE order_id = ? FOR UPDATE`,
+            [order_id]
+        );
+
+        if (orderRows.length === 0) {
+            return res.status(404).json({ message: 'Order not found' });
+        }
+
+        const order = orderRows[0];
+
+        if (String(order.user_id) !== String(user_id)) {
+            return res.status(403).json({ message: 'You can only pay for your own orders' });
+        }
+
+        if (['COMPLETED', 'CANCELLED', 'DONE'].includes(order.order_status)) {
+            return res.status(400).json({ message: 'This order cannot be paid' });
+        }
+
+        if (order.payment_method !== 'CARD') {
+            return res.status(400).json({ message: 'Only card orders can use Stripe' });
+        }
+
+        const amount = Number(order.total_amount);
+        if (!Number.isFinite(amount) || amount <= 0 || !Number.isSafeInteger(Math.round(amount * 100)) || Math.round(amount * 100) <= 0) {
+            return res.status(400).json({ message: 'Order has an invalid total' });
+        }
 
         try {
-            // 1. Create Stripe PaymentIntent
+            const [existing] = await db.promise().execute(
+                'SELECT stripe_payment_intent_id FROM payments WHERE order_id = ? ORDER BY payment_id DESC LIMIT 1', [order_id]);
+            if (existing.length) {
+                const intent = await stripe.paymentIntents.retrieve(existing[0].stripe_payment_intent_id);
+                if (intent.status === 'canceled' || intent.amount !== Math.round(amount * 100) || intent.currency !== 'usd') {
+                    await db.promise().rollback();
+                    return res.status(409).json({ message: 'Existing payment requires review' });
+                }
+                await db.promise().commit();
+                return res.json({ clientSecret: intent.client_secret, amount });
+            }
             const paymentIntent = await stripe.paymentIntents.create({
                 amount: Math.round(amount * 100),
                 currency: 'usd',
@@ -25,51 +62,62 @@ exports.createPaymentIntent = async (req, res) => {
                     enabled: true,
                 },
                 metadata: {
-                    order_id,
-                    user_id
+                    order_id: String(order_id),
+                    user_id: String(user_id)
                 }
-            });
+            }, { idempotencyKey: `order-${order_id}-${Math.round(amount * 100)}-usd` });
 
-            // 2. Create payment record
             await db.promise().execute(
                 'INSERT INTO payments (order_id, amount, payment_status, stripe_payment_intent_id) VALUES (?, ?, ?, ?)',
                 [order_id, amount, 'PENDING', paymentIntent.id]
             );
 
-            // 3. Update order status
             await db.promise().execute(
                 'UPDATE orders SET order_status = ? WHERE order_id = ?',
                 ['PROCESSING', order_id]
             );
 
-            // 4. 🔥 PROMISIFY db.query so processOrder can use await
-            const promisifiedDb = {
-                ...db,
-                query: util.promisify(db.query).bind(db)
-            };
-
-
-            // 4. ✅ Call processOrder to deduct inventory
-            await processOrder(promisifiedDb, order_id);
-
-            // 5. Commit everything
             await db.promise().commit();
 
-            // 6. Send client secret
             res.json({
-                clientSecret: paymentIntent.client_secret
+                clientSecret: paymentIntent.client_secret,
+                amount
             });
-
         } catch (error) {
             await db.promise().rollback();
-            console.error('Error during payment and processing:', error);
-            res.status(500).json({ message: 'Payment creation or inventory processing failed', error: error.message });
+            console.error('Error during payment intent creation:', error);
+            res.status(500).json({ message: 'Payment creation failed'});
         }
-
     } catch (error) {
         console.error('Top-level payment intent creation error:', error);
-        res.status(500).json({ message: 'Error creating payment intent', error: error.message });
+        res.status(500).json({ message: 'Error creating payment intent'});
+    } finally {
+        // Rollback also releases locks on early validation returns.
+        await db.promise().rollback();
+        db.end();
     }
+};
+
+// Stripe retries unsuccessful deliveries; the same locked confirmation path is
+// safe for both webhook retries and the browser's confirmation request.
+exports.handleWebhook = async (req, res) => {
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+        return res.status(503).json({ message: 'Payment webhook is not configured' });
+    }
+    let event;
+    try {
+        event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET);
+    } catch (error) {
+        return res.status(400).json({ message: 'Invalid webhook signature' });
+    }
+    if (event.type !== 'payment_intent.succeeded') return res.json({ received: true });
+    const intent = event.data.object;
+    return exports.confirmPayment({
+        db: req.db,
+        body: { order_id: intent.metadata.order_id },
+        params: { paymentIntentId: intent.id },
+        user: { user_id: intent.metadata.user_id }
+    }, res);
 };
 
 // // Handle webhook events from Stripe
@@ -306,73 +354,77 @@ exports.getPaymentStatistics = async (req, res) => {
 
 // Confirm payment manually
 exports.confirmPayment = async (req, res) => {
+    const { order_id } = req.body;
+    const paymentIntentId = req.params.paymentIntentId;
+    if (!order_id || !paymentIntentId) {
+        return res.status(400).json({ message: 'Order ID and payment intent are required' });
+    }
+    let db;
+    let inTransaction = false;
     try {
-        const { order_id } = req.body;
-        const paymentIntentId = req.params.paymentIntentId;
-        const db = req.db;
-
-        await db.promise().beginTransaction();
-
-        try {
-            // Verify the payment intent with Stripe
-            const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-            
-            if (paymentIntent.status !== 'succeeded') {
-                throw new Error('Payment has not succeeded');
-            }
-
-            // Update payment status
-            await db.promise().execute(
-                'UPDATE payments SET payment_status = ? WHERE stripe_payment_intent_id = ?',
-                ['COMPLETED', paymentIntentId]
-            );
-
-            // Get order details
-            const [orderRows] = await db.promise().execute(
-                'SELECT order_type FROM orders WHERE order_id = ?',
-                [order_id]
-            );
-
-            if (orderRows.length > 0) {
-                const order = orderRows[0];
-                
-                if (order.order_type === 'DIRECT_SALE') {
-                    // For direct sales, update inventory immediately
-                    const [orderProducts] = await db.promise().execute(
-                        'SELECT product_id, quantity FROM order_product WHERE order_id = ?',
-                        [order_id]
-                    );
-
-                    for (const item of orderProducts) {
-                        await db.promise().execute(
-                            'UPDATE product SET stock_quantity = stock_quantity - ? WHERE product_id = ?',
-                            [item.quantity, item.product_id]
-                        );
-                    }
-
-                    // Update order status to COMPLETED for direct sales
-                    await db.promise().execute(
-                        'UPDATE orders SET order_status = ? WHERE order_id = ?',
-                        ['COMPLETED', order_id]
-                    );
-                // } else {
-                //     // Update order status to COMPLETED for production orders too
-                //     await db.promise().execute(
-                //         'UPDATE orders SET order_status = ? WHERE order_id = ?',
-                //         ['COMPLETED', order_id]
-                //     );
-                }
-            }
-
-            await db.promise().commit();
-            res.json({ success: true, message: 'Payment confirmed successfully' });
-        } catch (error) {
-            await db.promise().rollback();
-            throw error;
+        const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        if (intent.status !== 'succeeded') {
+            return res.status(400).json({ message: 'Payment has not succeeded' });
         }
+        if (String(intent.metadata.order_id) !== String(order_id)) {
+            return res.status(400).json({ message: 'Payment does not match this order' });
+        }
+        db = paymentConnection(req.db);
+        await db.promise().beginTransaction();
+        inTransaction = true;
+        const [orders] = await db.promise().execute(
+            'SELECT order_id, user_id, order_type, order_status, total_amount, payment_method FROM orders WHERE order_id = ? FOR UPDATE', [order_id]);
+        const reject = async (status, message) => {
+            await db.promise().rollback();
+            inTransaction = false;
+            return res.status(status).json({ message });
+        };
+        if (!orders.length) return await reject(404, 'Order not found');
+        const order = orders[0];
+        if (String(order.user_id) !== String(req.user.user_id)) {
+            return await reject(403, 'You can only confirm your own orders');
+        }
+        const [payments] = await db.promise().execute(
+            'SELECT payment_id, payment_status, amount FROM payments WHERE stripe_payment_intent_id = ? AND order_id = ? FOR UPDATE',
+            [paymentIntentId, order_id]);
+        if (!payments.length) return await reject(404, 'Payment record not found');
+        const expected = Math.round(Number(order.total_amount) * 100);
+        if (order.payment_method !== 'CARD' || !Number.isSafeInteger(expected) || expected <= 0 ||
+            intent.currency !== 'usd' || intent.amount !== expected || intent.amount_received !== expected ||
+            String(intent.metadata.user_id) !== String(order.user_id) ||
+            payments.some(payment => Math.round(Number(payment.amount) * 100) !== expected)) {
+            return await reject(400, 'Payment amount, currency or owner does not match the order');
+        }
+        if (payments.some(payment => payment.payment_status === 'COMPLETED')) {
+            await db.promise().commit();
+            inTransaction = false;
+            return res.json({ success: true, message: 'Payment already confirmed' });
+        }
+        const [completed] = await db.promise().execute(
+            "SELECT payment_id FROM payments WHERE order_id = ? AND payment_status = 'COMPLETED'", [order_id]);
+        if (completed.length || ['COMPLETED', 'DONE', 'CANCELLED'].includes(order.order_status)) {
+            return await reject(409, 'Order cannot be fulfilled again');
+        }
+        if (order.order_type === 'DIRECT_SALE') {
+            await deductDirectSaleStock(db, order_id);
+        } else if (order.order_type === 'PRODUCTION_ORDER') {
+            await processOrder({ query: util.promisify(db.query).bind(db) }, order_id);
+        } else {
+            return await reject(400, 'Unsupported order type');
+        }
+        await db.promise().execute('UPDATE orders SET order_status = ? WHERE order_id = ?',
+            [order.order_type === 'DIRECT_SALE' ? 'COMPLETED' : 'DONE', order_id]);
+        await db.promise().execute('UPDATE payments SET payment_status = ? WHERE stripe_payment_intent_id = ? AND order_id = ?',
+            ['COMPLETED', paymentIntentId, order_id]);
+        await db.promise().commit();
+        inTransaction = false;
+        return res.json({ success: true, message: 'Payment confirmed successfully' });
     } catch (error) {
+        if (inTransaction) await db.promise().rollback();
         console.error('Error confirming payment:', error);
-        res.status(500).json({ message: 'Error confirming payment', error: error.message });
+        return res.status(500).json({ message: 'Error confirming payment' });
+    } finally {
+        if (db) db.end();
     }
 };
 

@@ -72,6 +72,11 @@ app.use((req, res, next) => {
 });
 
 // Other middleware
+// Stripe signature verification requires the unparsed request bytes.
+app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+    req.db = db;
+    return require('./controller/paymentController').handleWebhook(req, res);
+});
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));

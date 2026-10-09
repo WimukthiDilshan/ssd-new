@@ -52,7 +52,7 @@ router.get('/:id', authenticateUser, getOrder);
 // router.patch('/:id/process-inventory-after-payment', authenticateUser, processInventoryAfterPayment);
 
 // Process order (unified endpoint)
-router.post('/:id/process', authenticateUser, processOrder);
+router.post('/:id/process', authenticateUser, processProductionOrder);
 
 // Get recent production orders
 router.get('/production/recent', authenticateUser, getRecentProductionOrders);
